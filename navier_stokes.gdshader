@@ -14,9 +14,9 @@ void fragment() {
     vec2 velocity = old_data.gb;
     
     // 2. Apply gentle dissipation over time
-    density *= 0.98; 
-    velocity *= 0.95;
-    
+    density *= 0.80; 
+    velocity *= 0.80;
+
     // 3. Draw trail when clicking
     if (is_clicking) {
         float dist = distance(UV, mouse_position);
