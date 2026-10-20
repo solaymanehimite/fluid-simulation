@@ -6,11 +6,13 @@
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_7ptn5"]
 shader = ExtResource("1_vmo2h")
 shader_parameter/mouse_position = Vector2(0, 0)
+shader_parameter/mouse_speed = Vector2(0, 0)
 shader_parameter/is_clicking = false
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_iuv88"]
 shader = ExtResource("1_vmo2h")
 shader_parameter/mouse_position = Vector2(0, 0)
+shader_parameter/mouse_speed = Vector2(0, 0)
 shader_parameter/is_clicking = false
 
 [node name="Simulation" type="Node2D" unique_id=191330725]
