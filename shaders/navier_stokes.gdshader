@@ -26,7 +26,7 @@ void fragment() {
     shaft *= 1.0 - smoothstep(arrow_length - 0.02, arrow_length, abs(along));
 
     float head_center = arrow_length * 0.72;
-    float head_line = abs(across - (head_center - along) * 0.9);
+    float head_line = abs(across - (head_center - along) * 0.45);
     float arrow_head = 1.0 - smoothstep(0.025, 0.05, head_line);
     arrow_head *= step(0.0, head_center - along);
     arrow_head *= step(head_center - arrow_length, along);

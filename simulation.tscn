@@ -11,7 +11,7 @@
 shader = ExtResource("1_vmo2h")
 shader_parameter/divergence_texture = SubResource("Texture2DRD_divergence")
 shader_parameter/velocity_texture = SubResource("Texture2DRD_velocity")
-shader_parameter/grid_size = Vector2(48, 48)
+shader_parameter/grid_size = Vector2(16, 16)
 
 [sub_resource type="PlaceholderTexture2D" id="PlaceholderTexture2D_pv5co"]
 
@@ -23,6 +23,9 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_7ptn5")
+width = 32
+height = 32
+pressure_iterations = 30
 
 [node name="PanelContainer" type="PanelContainer" parent="." unique_id=1307574083]
 layout_mode = 1

@@ -1,9 +1,9 @@
 extends Control
 
 @export_group("Simulation Settings")
-@export var width := 48
-@export var height := 48
-@export_range(1, 200) var pressure_iterations := 30
+@export var width := 16
+@export var height := 16
+@export_range(1, 200) var pressure_iterations := 100
 @export_range(0.5, 10.0, 0.5) var mouse_brush_radius := 2.0
 @export_range(0.1, 100.0, 0.5) var mouse_max_velocity := 10.0
 
@@ -23,6 +23,8 @@ var divergence_shader_rid: RID
 var divergence_pipeline_rid: RID
 var pressure_shader_rid: RID
 var pressure_pipeline_rid: RID
+var projection_shader_rid: RID
+var projection_pipeline_rid: RID
 var horizontal_buffer: RID
 var vertical_buffer: RID
 var injection_uniform_set_rid: RID
@@ -37,11 +39,15 @@ var pressure_a_to_b_input_set_rid: RID
 var pressure_a_to_b_output_set_rid: RID
 var pressure_b_to_a_input_set_rid: RID
 var pressure_b_to_a_output_set_rid: RID
+var projection_a_pressure_set_rid: RID
+var projection_b_pressure_set_rid: RID
 
 func _ready() -> void:
 	var screen_material := $PanelContainer/Screen.material as ShaderMaterial
 	divergence_texture = screen_material.get_shader_parameter(&"divergence_texture") as Texture2DRD
 	velocity_texture = screen_material.get_shader_parameter(&"velocity_texture") as Texture2DRD
+	# Keep the procedural arrow grid aligned with the simulation dimensions.
+	screen_material.set_shader_parameter(&"grid_size", Vector2(width, height))
 
 	# These resources are shared with the canvas renderer, so create them on
 	# the render thread and use the main RenderingDevice.
@@ -96,6 +102,10 @@ func _initialize_compute_code() -> void:
 	var pressure_file := load("res://shaders/compute/pressure_jacobi.glsl") as RDShaderFile
 	pressure_shader_rid = rd.shader_create_from_spirv(pressure_file.get_spirv())
 	pressure_pipeline_rid = rd.compute_pipeline_create(pressure_shader_rid)
+
+	var projection_file := load("res://shaders/compute/project_velocity.glsl") as RDShaderFile
+	projection_shader_rid = rd.shader_create_from_spirv(projection_file.get_spirv())
+	projection_pipeline_rid = rd.compute_pipeline_create(projection_shader_rid)
 
 	var horizontal_data := _create_horizontal_data()
 	var vertical_data := _create_vertical_data()
@@ -185,6 +195,9 @@ func _initialize_compute_code() -> void:
 	pressure_b_to_a_input_set_rid = b_to_a_sets[0]
 	pressure_b_to_a_output_set_rid = b_to_a_sets[1]
 
+	projection_a_pressure_set_rid = _create_projection_set(pressure_texture_a_rid)
+	projection_b_pressure_set_rid = _create_projection_set(pressure_texture_b_rid)
+
 	# Both textures are displayed by the fragment shader.
 	divergence_texture.texture_rd_rid = divergence_texture_rid
 	velocity_texture.texture_rd_rid = velocity_texture_rid
@@ -208,6 +221,26 @@ func _create_pressure_sets(input_rid: RID, output_rid: RID) -> Array[RID]:
 	var input_set_rid := rd.uniform_set_create([input], pressure_shader_rid, 1)
 	var output_set_rid := rd.uniform_set_create([output], pressure_shader_rid, 2)
 	return [input_set_rid, output_set_rid]
+
+func _create_projection_set(pressure_rid: RID) -> RID:
+	var pressure := RDUniform.new()
+	pressure.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	pressure.binding = 0
+	pressure.add_id(pressure_rid)
+
+	var horizontal := RDUniform.new()
+	horizontal.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	horizontal.binding = 1
+	horizontal.add_id(horizontal_buffer)
+
+	var vertical := RDUniform.new()
+	vertical.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	vertical.binding = 2
+	vertical.add_id(vertical_buffer)
+
+	return rd.uniform_set_create(
+		[pressure, horizontal, vertical], projection_shader_rid, 0
+	)
 
 func _render_process(position: Vector2, impulse: Vector2, active: bool) -> void:
 	if not rd or not divergence_pipeline_rid.is_valid():
@@ -236,14 +269,7 @@ func _render_process(position: Vector2, impulse: Vector2, active: bool) -> void:
 		rd.compute_list_dispatch(compute_list, injection_x_groups, injection_y_groups, 1)
 		rd.compute_list_add_barrier(compute_list)
 
-	# Pass 2: convert face velocities into cell-centered velocity vectors.
-	rd.compute_list_bind_compute_pipeline(compute_list, velocity_visualize_pipeline_rid)
-	rd.compute_list_bind_uniform_set(compute_list, velocity_visualize_uniform_set_rid, 0)
-	rd.compute_list_set_push_constant(compute_list, push_constants, 16)
-	rd.compute_list_dispatch(compute_list, x_groups, y_groups, 1)
-	rd.compute_list_add_barrier(compute_list)
-
-	# Pass 3: calculate divergence.
+	# Pass 2: calculate divergence.
 	rd.compute_list_bind_compute_pipeline(compute_list, divergence_pipeline_rid)
 	rd.compute_list_bind_uniform_set(compute_list, divergence_uniform_set_rid, 0)
 	rd.compute_list_set_push_constant(compute_list, push_constants, 16)
@@ -263,6 +289,28 @@ func _render_process(position: Vector2, impulse: Vector2, active: bool) -> void:
 		if iteration < pressure_iterations - 1:
 			rd.compute_list_add_barrier(compute_list)
 
+	# Pass 5: subtract the pressure gradient from the velocities.
+	var final_pressure_set := projection_b_pressure_set_rid if pressure_iterations % 2 == 0 else projection_a_pressure_set_rid
+	var projection_x_groups := width / 8 + 1
+	var projection_y_groups := height / 8 + 1
+	rd.compute_list_bind_compute_pipeline(compute_list, projection_pipeline_rid)
+	rd.compute_list_bind_uniform_set(compute_list, final_pressure_set, 0)
+	rd.compute_list_set_push_constant(compute_list, push_constants, 16)
+	rd.compute_list_dispatch(compute_list, projection_x_groups, projection_y_groups, 1)
+	rd.compute_list_add_barrier(compute_list)
+
+	# Pass 6: recompute divergence so the displayed colors show the corrected field.
+	rd.compute_list_bind_compute_pipeline(compute_list, divergence_pipeline_rid)
+	rd.compute_list_bind_uniform_set(compute_list, divergence_uniform_set_rid, 0)
+	rd.compute_list_set_push_constant(compute_list, push_constants, 16)
+	rd.compute_list_dispatch(compute_list, x_groups, y_groups, 1)
+	rd.compute_list_add_barrier(compute_list)
+
+	# Pass 7: visualize the corrected velocities.
+	rd.compute_list_bind_compute_pipeline(compute_list, velocity_visualize_pipeline_rid)
+	rd.compute_list_bind_uniform_set(compute_list, velocity_visualize_uniform_set_rid, 0)
+	rd.compute_list_set_push_constant(compute_list, push_constants, 16)
+	rd.compute_list_dispatch(compute_list, x_groups, y_groups, 1)
 	rd.compute_list_end()
 
 func _create_horizontal_data() -> PackedByteArray:
@@ -299,10 +347,13 @@ func _free_compute_resources() -> void:
 		divergence_uniform_set_rid, pressure_divergence_set_rid,
 		pressure_a_to_b_input_set_rid, pressure_a_to_b_output_set_rid,
 		pressure_b_to_a_input_set_rid, pressure_b_to_a_output_set_rid,
+		projection_a_pressure_set_rid, projection_b_pressure_set_rid,
 		horizontal_buffer, vertical_buffer, divergence_texture_rid, velocity_texture_rid,
 		pressure_texture_a_rid, pressure_texture_b_rid,
-		velocity_visualize_pipeline_rid, injection_pipeline_rid, divergence_pipeline_rid, pressure_pipeline_rid,
-		velocity_visualize_shader_rid, injection_shader_rid, divergence_shader_rid, pressure_shader_rid
+		velocity_visualize_pipeline_rid, injection_pipeline_rid, divergence_pipeline_rid,
+		pressure_pipeline_rid, projection_pipeline_rid,
+		velocity_visualize_shader_rid, injection_shader_rid, divergence_shader_rid,
+		pressure_shader_rid, projection_shader_rid
 	]:
 		if resource.is_valid():
 			rd.free_rid(resource)
