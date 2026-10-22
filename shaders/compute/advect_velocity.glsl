@@ -7,7 +7,7 @@ layout(push_constant) uniform Params {
     int width;
     int height;
     float delta;
-    float padding;
+    float dissipation;
 } params;
 
 layout(set = 0, binding = 0, std430) readonly buffer HorizontalIn { float horizontal_in[]; };
@@ -64,10 +64,11 @@ void main() {
     vec2 velocity = sample_velocity(vec2(cell));
     vec2 previous = vec2(cell) - velocity * params.delta;
 
+    float remaining = exp(-params.dissipation * params.delta);
     if (cell.x < params.width + 1 && cell.y < params.height) {
-        horizontal_out[cell.y * (params.width + 1) + cell.x] = sample_u(previous);
+        horizontal_out[cell.y * (params.width + 1) + cell.x] = sample_u(previous) * remaining;
     }
     if (cell.x < params.width && cell.y < params.height + 1) {
-        vertical_out[cell.y * params.width + cell.x] = sample_v(previous);
+        vertical_out[cell.y * params.width + cell.x] = sample_v(previous) * remaining;
     }
 }

@@ -6,6 +6,7 @@ extends Control
 @export_range(1, 200) var pressure_iterations := 100
 @export_range(0.5, 10.0, 0.5) var mouse_brush_radius := 2.0
 @export_range(0.1, 100.0, 0.5) var mouse_max_velocity := 10.0
+@export_range(0.0, 10.0, 0.1) var velocity_dissipation := 0.05
 @export_range(0.0, 2.0, 0.01) var advection_time_scale := 1.0
 @export var enable_pressure_projection := false
 @export_range(0.0, 1.0, 0.05) var boundary_restitution := 1.0
@@ -15,8 +16,9 @@ var divergence_texture: Texture2DRD
 var velocity_texture: Texture2DRD
 var dye_texture: Texture2DRD
 var screen_material: ShaderMaterial
-var arrows_enabled := true
-var divergence_enabled := true
+var arrows_enabled := false
+var divergence_enabled := false
+var dye_color := Color(1.0, 0.2, 0.03, 1.0)
 var dye_is_a_current := true
 var mouse_grid_position := Vector2.ZERO
 var mouse_uv := Vector2(0.5, 0.5)
@@ -81,7 +83,8 @@ var dye_inject_b_set_rid: RID
 var boundary_uniform_set_rid: RID
 
 func _ready() -> void:
-	Input.set_mouse_mode(Input.MOUSE_MODE_HIDDEN)
+	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+	randomize()
 	screen_material = $PanelContainer/Screen.material as ShaderMaterial
 	divergence_texture = screen_material.get_shader_parameter(&"divergence_texture") as Texture2DRD
 	velocity_texture = screen_material.get_shader_parameter(&"velocity_texture") as Texture2DRD
@@ -119,14 +122,16 @@ func _input(event: InputEvent) -> void:
 			_update_brush_visual()
 			return
 		if event.button_index == MOUSE_BUTTON_LEFT:
-			mouse_is_down = event.pressed
 			mouse_uv = _screen_to_uv(event.position)
 			brush_visible = true
 			if event.pressed:
+				dye_color = Color.from_hsv(randf(), 0.8, 1.0)
 				mouse_grid_position = _screen_to_grid(event.position)
 				mouse_impulse = Vector2.ZERO
 				mouse_direction = Vector2.ZERO
+				mouse_is_down = true
 			else:
+				mouse_is_down = false
 				mouse_direction = Vector2.ZERO
 	elif event is InputEventMouseMotion:
 		mouse_uv = _screen_to_uv(event.position)
@@ -411,7 +416,7 @@ func _render_process(position: Vector2, impulse: Vector2, active: bool, delta: f
 	# the backtraced result into scratch buffers.
 	var advection_constants := PackedInt32Array([width, height]).to_byte_array()
 	advection_constants.append_array(
-		PackedFloat32Array([delta, 0.0]).to_byte_array()
+		PackedFloat32Array([delta, velocity_dissipation]).to_byte_array()
 	)
 	rd.compute_list_bind_compute_pipeline(compute_list, advect_pipeline_rid)
 	rd.compute_list_bind_uniform_set(compute_list, advect_input_set_rid, 0)
@@ -480,7 +485,7 @@ func _render_process(position: Vector2, impulse: Vector2, active: bool, delta: f
 	if active and impulse.length_squared() > 0.000001 and dye_inject_pipeline_rid.is_valid():
 		var dye_constants := PackedFloat32Array([
 			position.x, position.y, mouse_brush_radius, 1.0,
-			1.0, 0.2, 0.03, 0.8
+			dye_color.r, dye_color.g, dye_color.b, 0.8
 		])
 		var dye_inject_set := dye_inject_a_set_rid if dye_is_a_current else dye_inject_b_set_rid
 		rd.compute_list_bind_compute_pipeline(compute_list, dye_inject_pipeline_rid)

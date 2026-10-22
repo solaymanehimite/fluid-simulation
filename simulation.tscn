@@ -15,8 +15,8 @@ shader_parameter/divergence_texture = SubResource("Texture2DRD_divergence")
 shader_parameter/velocity_texture = SubResource("Texture2DRD_velocity")
 shader_parameter/dye_texture = SubResource("Texture2DRD_dye")
 shader_parameter/grid_size = Vector2(16, 16)
-shader_parameter/show_arrows = true
-shader_parameter/show_divergence = true
+shader_parameter/show_arrows = false
+shader_parameter/show_divergence = false
 shader_parameter/show_brush = false
 shader_parameter/brush_position = Vector2(0.5, 0.5)
 shader_parameter/brush_radius = 2.0
@@ -37,6 +37,7 @@ pressure_iterations = 60
 mouse_max_velocity = 20.1
 advection_time_scale = 2.0
 enable_pressure_projection = true
+dye_dissipation = 0.3
 
 [node name="PanelContainer" type="PanelContainer" parent="." unique_id=1307574083]
 layout_mode = 1
