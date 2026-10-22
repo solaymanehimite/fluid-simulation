@@ -1,34 +1,79 @@
 extends Control
 
 @export_group("Simulation Settings")
-@export var width := 10
-@export var height := 10
-
-var horizontal: PackedFloat32Array = []
-var vertical: PackedFloat32Array = []
+@export var width := 48
+@export var height := 48
+@export_range(1, 200) var pressure_iterations := 30
+@export_range(0.5, 10.0, 0.5) var mouse_brush_radius := 2.0
+@export_range(0.1, 100.0, 0.5) var mouse_max_velocity := 10.0
 
 var divergence_texture: Texture2DRD
+var velocity_texture: Texture2DRD
+var mouse_grid_position := Vector2.ZERO
+var mouse_impulse := Vector2.ZERO
+var mouse_is_down := false
 
-# These variables are only accessed on Godot's render thread after initialization.
+# These resources are accessed on Godot's render thread after initialization.
 var rd: RenderingDevice
-var shader_rid: RID
-var pipeline_rid: RID
+var injection_shader_rid: RID
+var injection_pipeline_rid: RID
+var velocity_visualize_shader_rid: RID
+var velocity_visualize_pipeline_rid: RID
+var divergence_shader_rid: RID
+var divergence_pipeline_rid: RID
+var pressure_shader_rid: RID
+var pressure_pipeline_rid: RID
 var horizontal_buffer: RID
 var vertical_buffer: RID
+var injection_uniform_set_rid: RID
+var velocity_visualize_uniform_set_rid: RID
 var divergence_texture_rid: RID
-var uniform_set_rid: RID
+var velocity_texture_rid: RID
+var pressure_texture_a_rid: RID
+var pressure_texture_b_rid: RID
+var divergence_uniform_set_rid: RID
+var pressure_divergence_set_rid: RID
+var pressure_a_to_b_input_set_rid: RID
+var pressure_a_to_b_output_set_rid: RID
+var pressure_b_to_a_input_set_rid: RID
+var pressure_b_to_a_output_set_rid: RID
 
 func _ready() -> void:
 	var screen_material := $PanelContainer/Screen.material as ShaderMaterial
 	divergence_texture = screen_material.get_shader_parameter(&"divergence_texture") as Texture2DRD
+	velocity_texture = screen_material.get_shader_parameter(&"velocity_texture") as Texture2DRD
 
-	# RenderingDevice resources must be created on the render thread because they
-	# are shared directly with the canvas renderer.
+	# These resources are shared with the canvas renderer, so create them on
+	# the render thread and use the main RenderingDevice.
 	RenderingServer.call_on_render_thread(_initialize_compute_code)
 
+func _input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		mouse_is_down = event.pressed
+		if event.pressed:
+			mouse_grid_position = _screen_to_grid(event.position)
+			mouse_impulse = Vector2.ZERO
+	elif event is InputEventMouseMotion and mouse_is_down:
+		mouse_grid_position = _screen_to_grid(event.position)
+		var screen_size := ($PanelContainer/Screen as Control).size
+		var drag_in_grid: Vector2 = event.relative / screen_size * Vector2(width, height)
+		if drag_in_grid.length_squared() > 0.000001:
+			mouse_impulse = drag_in_grid.normalized() * mouse_max_velocity
+
+func _screen_to_grid(screen_position: Vector2) -> Vector2:
+	var screen := $PanelContainer/Screen as Control
+	var local_position := screen.get_global_transform().affine_inverse() * screen_position
+	return Vector2(
+		local_position.x / screen.size.x * width,
+		local_position.y / screen.size.y * height
+	)
+
 func _process(_delta: float) -> void:
-	# Queue the compute work before Godot renders the canvas for this frame.
-	RenderingServer.call_on_render_thread(_render_process)
+	var position := mouse_grid_position
+	var impulse := mouse_impulse
+	var active := mouse_is_down
+	mouse_impulse = Vector2.ZERO
+	RenderingServer.call_on_render_thread(_render_process.bind(position, impulse, active))
 
 func _initialize_compute_code() -> void:
 	rd = RenderingServer.get_rendering_device()
@@ -36,9 +81,21 @@ func _initialize_compute_code() -> void:
 		push_error("Compute shaders are not supported on this renderer mode.")
 		return
 
-	var shader_file := load("res://shaders/compute/divergence.glsl") as RDShaderFile
-	shader_rid = rd.shader_create_from_spirv(shader_file.get_spirv())
-	pipeline_rid = rd.compute_pipeline_create(shader_rid)
+	var injection_file := load("res://shaders/compute/inject_velocity.glsl") as RDShaderFile
+	injection_shader_rid = rd.shader_create_from_spirv(injection_file.get_spirv())
+	injection_pipeline_rid = rd.compute_pipeline_create(injection_shader_rid)
+
+	var velocity_visualize_file := load("res://shaders/compute/velocity_visualize.glsl") as RDShaderFile
+	velocity_visualize_shader_rid = rd.shader_create_from_spirv(velocity_visualize_file.get_spirv())
+	velocity_visualize_pipeline_rid = rd.compute_pipeline_create(velocity_visualize_shader_rid)
+
+	var divergence_file := load("res://shaders/compute/divergence.glsl") as RDShaderFile
+	divergence_shader_rid = rd.shader_create_from_spirv(divergence_file.get_spirv())
+	divergence_pipeline_rid = rd.compute_pipeline_create(divergence_shader_rid)
+
+	var pressure_file := load("res://shaders/compute/pressure_jacobi.glsl") as RDShaderFile
+	pressure_shader_rid = rd.shader_create_from_spirv(pressure_file.get_spirv())
+	pressure_pipeline_rid = rd.compute_pipeline_create(pressure_shader_rid)
 
 	var horizontal_data := _create_horizontal_data()
 	var vertical_data := _create_vertical_data()
@@ -58,8 +115,42 @@ func _initialize_compute_code() -> void:
 		RenderingDevice.TEXTURE_USAGE_STORAGE_BIT |
 		RenderingDevice.TEXTURE_USAGE_CAN_COPY_TO_BIT
 	)
-	divergence_texture_rid = rd.texture_create(texture_format, RDTextureView.new(), [])
-	rd.texture_clear(divergence_texture_rid, Color(0, 0, 0, 1), 0, 1, 0, 1)
+
+	divergence_texture_rid = _create_cleared_texture(texture_format)
+	velocity_texture_rid = _create_cleared_texture(texture_format)
+	pressure_texture_a_rid = _create_cleared_texture(texture_format)
+	pressure_texture_b_rid = _create_cleared_texture(texture_format)
+
+	var injection_horiz := RDUniform.new()
+	injection_horiz.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	injection_horiz.binding = 0
+	injection_horiz.add_id(horizontal_buffer)
+
+	var injection_vert := RDUniform.new()
+	injection_vert.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	injection_vert.binding = 1
+	injection_vert.add_id(vertical_buffer)
+	injection_uniform_set_rid = rd.uniform_set_create(
+		[injection_horiz, injection_vert], injection_shader_rid, 0
+	)
+
+	var visual_horiz := RDUniform.new()
+	visual_horiz.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	visual_horiz.binding = 0
+	visual_horiz.add_id(horizontal_buffer)
+
+	var visual_vert := RDUniform.new()
+	visual_vert.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	visual_vert.binding = 1
+	visual_vert.add_id(vertical_buffer)
+
+	var visual_velocity := RDUniform.new()
+	visual_velocity.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	visual_velocity.binding = 2
+	visual_velocity.add_id(velocity_texture_rid)
+	velocity_visualize_uniform_set_rid = rd.uniform_set_create(
+		[visual_horiz, visual_vert, visual_velocity], velocity_visualize_shader_rid, 0
+	)
 
 	var u_horiz := RDUniform.new()
 	u_horiz.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
@@ -71,32 +162,108 @@ func _initialize_compute_code() -> void:
 	u_vert.binding = 1
 	u_vert.add_id(vertical_buffer)
 
-	var u_div := RDUniform.new()
-	u_div.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
-	u_div.binding = 2
-	u_div.add_id(divergence_texture_rid)
-
-	uniform_set_rid = rd.uniform_set_create([u_horiz, u_vert, u_div], shader_rid, 0)
-	divergence_texture.texture_rd_rid = divergence_texture_rid
-
-func _render_process() -> void:
-	if not rd or not pipeline_rid.is_valid() or not uniform_set_rid.is_valid():
-		return
-
-	var push_constants := PackedInt32Array([width, height, 0, 0])
-	var compute_list := rd.compute_list_begin()
-	rd.compute_list_bind_compute_pipeline(compute_list, pipeline_rid)
-	rd.compute_list_bind_uniform_set(compute_list, uniform_set_rid, 0)
-	rd.compute_list_set_push_constant(
-		compute_list, push_constants.to_byte_array(), 16
+	var u_divergence := RDUniform.new()
+	u_divergence.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_divergence.binding = 2
+	u_divergence.add_id(divergence_texture_rid)
+	divergence_uniform_set_rid = rd.uniform_set_create(
+		[u_horiz, u_vert, u_divergence], divergence_shader_rid, 0
 	)
 
+	var p_divergence := RDUniform.new()
+	p_divergence.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	p_divergence.binding = 0
+	p_divergence.add_id(divergence_texture_rid)
+	pressure_divergence_set_rid = rd.uniform_set_create(
+		[p_divergence], pressure_shader_rid, 0
+	)
+
+	var a_to_b_sets := _create_pressure_sets(pressure_texture_a_rid, pressure_texture_b_rid)
+	pressure_a_to_b_input_set_rid = a_to_b_sets[0]
+	pressure_a_to_b_output_set_rid = a_to_b_sets[1]
+	var b_to_a_sets := _create_pressure_sets(pressure_texture_b_rid, pressure_texture_a_rid)
+	pressure_b_to_a_input_set_rid = b_to_a_sets[0]
+	pressure_b_to_a_output_set_rid = b_to_a_sets[1]
+
+	# Both textures are displayed by the fragment shader.
+	divergence_texture.texture_rd_rid = divergence_texture_rid
+	velocity_texture.texture_rd_rid = velocity_texture_rid
+
+func _create_cleared_texture(texture_format: RDTextureFormat) -> RID:
+	var texture_rid := rd.texture_create(texture_format, RDTextureView.new(), [])
+	rd.texture_clear(texture_rid, Color(0, 0, 0, 1), 0, 1, 0, 1)
+	return texture_rid
+
+func _create_pressure_sets(input_rid: RID, output_rid: RID) -> Array[RID]:
+	var input := RDUniform.new()
+	input.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	input.binding = 0
+	input.add_id(input_rid)
+
+	var output := RDUniform.new()
+	output.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	output.binding = 0
+	output.add_id(output_rid)
+
+	var input_set_rid := rd.uniform_set_create([input], pressure_shader_rid, 1)
+	var output_set_rid := rd.uniform_set_create([output], pressure_shader_rid, 2)
+	return [input_set_rid, output_set_rid]
+
+func _render_process(position: Vector2, impulse: Vector2, active: bool) -> void:
+	if not rd or not divergence_pipeline_rid.is_valid():
+		return
+
+	var push_constants := PackedInt32Array([width, height, 0, 0]).to_byte_array()
 	var x_groups := (width - 1) / 8 + 1
 	var y_groups := (height - 1) / 8 + 1
+	var compute_list := rd.compute_list_begin()
+
+	# Pass 1: inject mouse movement into the velocity buffers.
+	# Only inject when the mouse actually moved. Otherwise a stationary held
+	# mouse would write a zero impulse over the existing velocities.
+	if active and impulse.length_squared() > 0.000001 and injection_pipeline_rid.is_valid():
+		var mouse_constants := PackedFloat32Array([
+			position.x, position.y, mouse_brush_radius, mouse_max_velocity,
+			impulse.x, impulse.y, float(width), float(height)
+		])
+		rd.compute_list_bind_compute_pipeline(compute_list, injection_pipeline_rid)
+		rd.compute_list_bind_uniform_set(compute_list, injection_uniform_set_rid, 0)
+		rd.compute_list_set_push_constant(
+			compute_list, mouse_constants.to_byte_array(), mouse_constants.size() * 4
+		)
+		var injection_x_groups := width / 8 + 1
+		var injection_y_groups := height / 8 + 1
+		rd.compute_list_dispatch(compute_list, injection_x_groups, injection_y_groups, 1)
+		rd.compute_list_add_barrier(compute_list)
+
+	# Pass 2: convert face velocities into cell-centered velocity vectors.
+	rd.compute_list_bind_compute_pipeline(compute_list, velocity_visualize_pipeline_rid)
+	rd.compute_list_bind_uniform_set(compute_list, velocity_visualize_uniform_set_rid, 0)
+	rd.compute_list_set_push_constant(compute_list, push_constants, 16)
 	rd.compute_list_dispatch(compute_list, x_groups, y_groups, 1)
+	rd.compute_list_add_barrier(compute_list)
+
+	# Pass 3: calculate divergence.
+	rd.compute_list_bind_compute_pipeline(compute_list, divergence_pipeline_rid)
+	rd.compute_list_bind_uniform_set(compute_list, divergence_uniform_set_rid, 0)
+	rd.compute_list_set_push_constant(compute_list, push_constants, 16)
+	rd.compute_list_dispatch(compute_list, x_groups, y_groups, 1)
+	rd.compute_list_add_barrier(compute_list)
+
+	# Pass 4: repeatedly estimate pressure using Jacobi iteration.
+	rd.compute_list_bind_compute_pipeline(compute_list, pressure_pipeline_rid)
+	rd.compute_list_bind_uniform_set(compute_list, pressure_divergence_set_rid, 0)
+	for iteration in pressure_iterations:
+		var input_set := pressure_a_to_b_input_set_rid if iteration % 2 == 0 else pressure_b_to_a_input_set_rid
+		var output_set := pressure_a_to_b_output_set_rid if iteration % 2 == 0 else pressure_b_to_a_output_set_rid
+		rd.compute_list_bind_uniform_set(compute_list, input_set, 1)
+		rd.compute_list_bind_uniform_set(compute_list, output_set, 2)
+		rd.compute_list_set_push_constant(compute_list, push_constants, 16)
+		rd.compute_list_dispatch(compute_list, x_groups, y_groups, 1)
+		if iteration < pressure_iterations - 1:
+			rd.compute_list_add_barrier(compute_list)
+
 	rd.compute_list_end()
-	# Do not call submit() or sync() here. The main renderer submits this work
-	# and inserts the required barrier before sampling the texture.
 
 func _create_horizontal_data() -> PackedByteArray:
 	var values := PackedFloat32Array()
@@ -125,15 +292,17 @@ func _notification(what: int) -> void:
 func _free_compute_resources() -> void:
 	if divergence_texture:
 		divergence_texture.texture_rd_rid = RID()
-	if uniform_set_rid.is_valid():
-		rd.free_rid(uniform_set_rid)
-	if horizontal_buffer.is_valid():
-		rd.free_rid(horizontal_buffer)
-	if vertical_buffer.is_valid():
-		rd.free_rid(vertical_buffer)
-	if divergence_texture_rid.is_valid():
-		rd.free_rid(divergence_texture_rid)
-	if pipeline_rid.is_valid():
-		rd.free_rid(pipeline_rid)
-	if shader_rid.is_valid():
-		rd.free_rid(shader_rid)
+	if velocity_texture:
+		velocity_texture.texture_rd_rid = RID()
+	for resource in [
+		injection_uniform_set_rid, velocity_visualize_uniform_set_rid,
+		divergence_uniform_set_rid, pressure_divergence_set_rid,
+		pressure_a_to_b_input_set_rid, pressure_a_to_b_output_set_rid,
+		pressure_b_to_a_input_set_rid, pressure_b_to_a_output_set_rid,
+		horizontal_buffer, vertical_buffer, divergence_texture_rid, velocity_texture_rid,
+		pressure_texture_a_rid, pressure_texture_b_rid,
+		velocity_visualize_pipeline_rid, injection_pipeline_rid, divergence_pipeline_rid, pressure_pipeline_rid,
+		velocity_visualize_shader_rid, injection_shader_rid, divergence_shader_rid, pressure_shader_rid
+	]:
+		if resource.is_valid():
+			rd.free_rid(resource)

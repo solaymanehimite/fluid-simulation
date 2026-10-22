@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cglyss7hu0v78"
+path="res://.godot/imported/pressure_jacobi.glsl-3dff440407605f39d339459316d9e43f.res"
+
+[deps]
+
+source_file="res://shaders/compute/pressure_jacobi.glsl"
+dest_files=["res://.godot/imported/pressure_jacobi.glsl-3dff440407605f39d339459316d9e43f.res"]
+
+[params]
+

@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bxqsr1bthpeir"
+path="res://.godot/imported/inject_velocity.glsl-6bf330c78cba7049ba1ff8e9aed0b7e1.res"
+
+[deps]
+
+source_file="res://shaders/compute/inject_velocity.glsl"
+dest_files=["res://.godot/imported/inject_velocity.glsl-6bf330c78cba7049ba1ff8e9aed0b7e1.res"]
+
+[params]
+

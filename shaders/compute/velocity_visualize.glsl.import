@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dnbnjw83vnqk"
+path="res://.godot/imported/velocity_visualize.glsl-a7e5a36ea6c355f7df79644a7225fb64.res"
+
+[deps]
+
+source_file="res://shaders/compute/velocity_visualize.glsl"
+dest_files=["res://.godot/imported/velocity_visualize.glsl-a7e5a36ea6c355f7df79644a7225fb64.res"]
+
+[params]
+

@@ -5,9 +5,13 @@
 
 [sub_resource type="Texture2DRD" id="Texture2DRD_divergence"]
 
+[sub_resource type="Texture2DRD" id="Texture2DRD_velocity"]
+
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_vmo2h"]
 shader = ExtResource("1_vmo2h")
 shader_parameter/divergence_texture = SubResource("Texture2DRD_divergence")
+shader_parameter/velocity_texture = SubResource("Texture2DRD_velocity")
+shader_parameter/grid_size = Vector2(48, 48)
 
 [sub_resource type="PlaceholderTexture2D" id="PlaceholderTexture2D_pv5co"]
 
