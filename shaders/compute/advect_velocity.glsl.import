@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bcjk2frd8lmb3"
+path="res://.godot/imported/advect_velocity.glsl-8c5e8adb5e8222e647094ba3e6908dc2.res"
+
+[deps]
+
+source_file="res://shaders/compute/advect_velocity.glsl"
+dest_files=["res://.godot/imported/advect_velocity.glsl-8c5e8adb5e8222e647094ba3e6908dc2.res"]
+
+[params]
+

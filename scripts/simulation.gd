@@ -6,11 +6,14 @@ extends Control
 @export_range(1, 200) var pressure_iterations := 100
 @export_range(0.5, 10.0, 0.5) var mouse_brush_radius := 2.0
 @export_range(0.1, 100.0, 0.5) var mouse_max_velocity := 10.0
+@export_range(0.0, 2.0, 0.01) var advection_time_scale := 1.0
+@export var enable_pressure_projection := false
 
 var divergence_texture: Texture2DRD
 var velocity_texture: Texture2DRD
 var mouse_grid_position := Vector2.ZERO
 var mouse_impulse := Vector2.ZERO
+var mouse_direction := Vector2.ZERO
 var mouse_is_down := false
 
 # These resources are accessed on Godot's render thread after initialization.
@@ -25,8 +28,18 @@ var pressure_shader_rid: RID
 var pressure_pipeline_rid: RID
 var projection_shader_rid: RID
 var projection_pipeline_rid: RID
+var advect_shader_rid: RID
+var advect_pipeline_rid: RID
+var copy_shader_rid: RID
+var copy_pipeline_rid: RID
 var horizontal_buffer: RID
 var vertical_buffer: RID
+var horizontal_scratch_buffer: RID
+var vertical_scratch_buffer: RID
+var advect_input_set_rid: RID
+var advect_output_set_rid: RID
+var copy_input_set_rid: RID
+var copy_output_set_rid: RID
 var injection_uniform_set_rid: RID
 var velocity_visualize_uniform_set_rid: RID
 var divergence_texture_rid: RID
@@ -59,12 +72,16 @@ func _input(event: InputEvent) -> void:
 		if event.pressed:
 			mouse_grid_position = _screen_to_grid(event.position)
 			mouse_impulse = Vector2.ZERO
+			mouse_direction = Vector2.ZERO
+		else:
+			mouse_direction = Vector2.ZERO
 	elif event is InputEventMouseMotion and mouse_is_down:
 		mouse_grid_position = _screen_to_grid(event.position)
 		var screen_size := ($PanelContainer/Screen as Control).size
 		var drag_in_grid: Vector2 = event.relative / screen_size * Vector2(width, height)
 		if drag_in_grid.length_squared() > 0.000001:
-			mouse_impulse = drag_in_grid.normalized() * mouse_max_velocity
+			mouse_direction = drag_in_grid.normalized()
+			mouse_impulse = mouse_direction * mouse_max_velocity
 
 func _screen_to_grid(screen_position: Vector2) -> Vector2:
 	var screen := $PanelContainer/Screen as Control
@@ -74,18 +91,32 @@ func _screen_to_grid(screen_position: Vector2) -> Vector2:
 		local_position.y / screen.size.y * height
 	)
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	var position := mouse_grid_position
+	# Keep applying the last drag direction while the button is held. This
+	# makes the cursor act like a continuous force instead of a one-frame kick.
 	var impulse := mouse_impulse
+	if mouse_is_down and mouse_direction.length_squared() > 0.000001:
+		impulse = mouse_direction * mouse_max_velocity
 	var active := mouse_is_down
 	mouse_impulse = Vector2.ZERO
-	RenderingServer.call_on_render_thread(_render_process.bind(position, impulse, active))
+	RenderingServer.call_on_render_thread(
+		_render_process.bind(position, impulse, active, delta * advection_time_scale)
+	)
 
 func _initialize_compute_code() -> void:
 	rd = RenderingServer.get_rendering_device()
 	if not rd:
 		push_error("Compute shaders are not supported on this renderer mode.")
 		return
+
+	var advect_file := load("res://shaders/compute/advect_velocity.glsl") as RDShaderFile
+	advect_shader_rid = rd.shader_create_from_spirv(advect_file.get_spirv())
+	advect_pipeline_rid = rd.compute_pipeline_create(advect_shader_rid)
+
+	var copy_file := load("res://shaders/compute/copy_velocity.glsl") as RDShaderFile
+	copy_shader_rid = rd.shader_create_from_spirv(copy_file.get_spirv())
+	copy_pipeline_rid = rd.compute_pipeline_create(copy_shader_rid)
 
 	var injection_file := load("res://shaders/compute/inject_velocity.glsl") as RDShaderFile
 	injection_shader_rid = rd.shader_create_from_spirv(injection_file.get_spirv())
@@ -111,6 +142,13 @@ func _initialize_compute_code() -> void:
 	var vertical_data := _create_vertical_data()
 	horizontal_buffer = rd.storage_buffer_create(horizontal_data.size(), horizontal_data)
 	vertical_buffer = rd.storage_buffer_create(vertical_data.size(), vertical_data)
+	horizontal_scratch_buffer = rd.storage_buffer_create(horizontal_data.size())
+	vertical_scratch_buffer = rd.storage_buffer_create(vertical_data.size())
+
+	advect_input_set_rid = _create_velocity_set(advect_shader_rid, 0, horizontal_buffer, vertical_buffer)
+	advect_output_set_rid = _create_velocity_set(advect_shader_rid, 1, horizontal_scratch_buffer, vertical_scratch_buffer)
+	copy_input_set_rid = _create_velocity_set(copy_shader_rid, 0, horizontal_scratch_buffer, vertical_scratch_buffer)
+	copy_output_set_rid = _create_velocity_set(copy_shader_rid, 1, horizontal_buffer, vertical_buffer)
 
 	var texture_format := RDTextureFormat.new()
 	texture_format.format = RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT
@@ -202,6 +240,19 @@ func _initialize_compute_code() -> void:
 	divergence_texture.texture_rd_rid = divergence_texture_rid
 	velocity_texture.texture_rd_rid = velocity_texture_rid
 
+func _create_velocity_set(shader_rid: RID, set_index: int, horizontal_rid: RID, vertical_rid: RID) -> RID:
+	var horizontal := RDUniform.new()
+	horizontal.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	horizontal.binding = 0
+	horizontal.add_id(horizontal_rid)
+
+	var vertical := RDUniform.new()
+	vertical.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	vertical.binding = 1
+	vertical.add_id(vertical_rid)
+
+	return rd.uniform_set_create([horizontal, vertical], shader_rid, set_index)
+
 func _create_cleared_texture(texture_format: RDTextureFormat) -> RID:
 	var texture_rid := rd.texture_create(texture_format, RDTextureView.new(), [])
 	rd.texture_clear(texture_rid, Color(0, 0, 0, 1), 0, 1, 0, 1)
@@ -242,7 +293,7 @@ func _create_projection_set(pressure_rid: RID) -> RID:
 		[pressure, horizontal, vertical], projection_shader_rid, 0
 	)
 
-func _render_process(position: Vector2, impulse: Vector2, active: bool) -> void:
+func _render_process(position: Vector2, impulse: Vector2, active: bool, delta: float) -> void:
 	if not rd or not divergence_pipeline_rid.is_valid():
 		return
 
@@ -251,9 +302,33 @@ func _render_process(position: Vector2, impulse: Vector2, active: bool) -> void:
 	var y_groups := (height - 1) / 8 + 1
 	var compute_list := rd.compute_list_begin()
 
-	# Pass 1: inject mouse movement into the velocity buffers.
-	# Only inject when the mouse actually moved. Otherwise a stationary held
-	# mouse would write a zero impulse over the existing velocities.
+	# Pass 1: semi-Lagrangian advection. Read the old velocity field and write
+	# the backtraced result into scratch buffers.
+	var advection_constants := PackedInt32Array([width, height]).to_byte_array()
+	advection_constants.append_array(
+		PackedFloat32Array([delta, 0.0]).to_byte_array()
+	)
+	rd.compute_list_bind_compute_pipeline(compute_list, advect_pipeline_rid)
+	rd.compute_list_bind_uniform_set(compute_list, advect_input_set_rid, 0)
+	rd.compute_list_bind_uniform_set(compute_list, advect_output_set_rid, 1)
+	rd.compute_list_set_push_constant(
+		compute_list, advection_constants, 16
+	)
+	var advection_x_groups := width / 8 + 1
+	var advection_y_groups := height / 8 + 1
+	rd.compute_list_dispatch(compute_list, advection_x_groups, advection_y_groups, 1)
+	rd.compute_list_add_barrier(compute_list)
+
+	# Copy the advected scratch buffers back into the buffers used by the rest
+	# of the pipeline.
+	rd.compute_list_bind_compute_pipeline(compute_list, copy_pipeline_rid)
+	rd.compute_list_bind_uniform_set(compute_list, copy_input_set_rid, 0)
+	rd.compute_list_bind_uniform_set(compute_list, copy_output_set_rid, 1)
+	rd.compute_list_set_push_constant(compute_list, push_constants, 16)
+	rd.compute_list_dispatch(compute_list, advection_x_groups, advection_y_groups, 1)
+	rd.compute_list_add_barrier(compute_list)
+
+	# Pass 2: inject the held mouse direction into the velocity buffers.
 	if active and impulse.length_squared() > 0.000001 and injection_pipeline_rid.is_valid():
 		var mouse_constants := PackedFloat32Array([
 			position.x, position.y, mouse_brush_radius, mouse_max_velocity,
@@ -276,37 +351,38 @@ func _render_process(position: Vector2, impulse: Vector2, active: bool) -> void:
 	rd.compute_list_dispatch(compute_list, x_groups, y_groups, 1)
 	rd.compute_list_add_barrier(compute_list)
 
-	# Pass 4: repeatedly estimate pressure using Jacobi iteration.
-	rd.compute_list_bind_compute_pipeline(compute_list, pressure_pipeline_rid)
-	rd.compute_list_bind_uniform_set(compute_list, pressure_divergence_set_rid, 0)
-	for iteration in pressure_iterations:
-		var input_set := pressure_a_to_b_input_set_rid if iteration % 2 == 0 else pressure_b_to_a_input_set_rid
-		var output_set := pressure_a_to_b_output_set_rid if iteration % 2 == 0 else pressure_b_to_a_output_set_rid
-		rd.compute_list_bind_uniform_set(compute_list, input_set, 1)
-		rd.compute_list_bind_uniform_set(compute_list, output_set, 2)
+	if enable_pressure_projection:
+		# Pass 4: repeatedly estimate pressure using Jacobi iteration.
+		rd.compute_list_bind_compute_pipeline(compute_list, pressure_pipeline_rid)
+		rd.compute_list_bind_uniform_set(compute_list, pressure_divergence_set_rid, 0)
+		for iteration in pressure_iterations:
+			var input_set := pressure_a_to_b_input_set_rid if iteration % 2 == 0 else pressure_b_to_a_input_set_rid
+			var output_set := pressure_a_to_b_output_set_rid if iteration % 2 == 0 else pressure_b_to_a_output_set_rid
+			rd.compute_list_bind_uniform_set(compute_list, input_set, 1)
+			rd.compute_list_bind_uniform_set(compute_list, output_set, 2)
+			rd.compute_list_set_push_constant(compute_list, push_constants, 16)
+			rd.compute_list_dispatch(compute_list, x_groups, y_groups, 1)
+			if iteration < pressure_iterations - 1:
+				rd.compute_list_add_barrier(compute_list)
+
+		# Pass 5: subtract the pressure gradient from the velocities.
+		var final_pressure_set := projection_b_pressure_set_rid if pressure_iterations % 2 == 0 else projection_a_pressure_set_rid
+		var projection_x_groups := width / 8 + 1
+		var projection_y_groups := height / 8 + 1
+		rd.compute_list_bind_compute_pipeline(compute_list, projection_pipeline_rid)
+		rd.compute_list_bind_uniform_set(compute_list, final_pressure_set, 0)
+		rd.compute_list_set_push_constant(compute_list, push_constants, 16)
+		rd.compute_list_dispatch(compute_list, projection_x_groups, projection_y_groups, 1)
+		rd.compute_list_add_barrier(compute_list)
+
+		# Pass 6: recompute divergence after projection.
+		rd.compute_list_bind_compute_pipeline(compute_list, divergence_pipeline_rid)
+		rd.compute_list_bind_uniform_set(compute_list, divergence_uniform_set_rid, 0)
 		rd.compute_list_set_push_constant(compute_list, push_constants, 16)
 		rd.compute_list_dispatch(compute_list, x_groups, y_groups, 1)
-		if iteration < pressure_iterations - 1:
-			rd.compute_list_add_barrier(compute_list)
+		rd.compute_list_add_barrier(compute_list)
 
-	# Pass 5: subtract the pressure gradient from the velocities.
-	var final_pressure_set := projection_b_pressure_set_rid if pressure_iterations % 2 == 0 else projection_a_pressure_set_rid
-	var projection_x_groups := width / 8 + 1
-	var projection_y_groups := height / 8 + 1
-	rd.compute_list_bind_compute_pipeline(compute_list, projection_pipeline_rid)
-	rd.compute_list_bind_uniform_set(compute_list, final_pressure_set, 0)
-	rd.compute_list_set_push_constant(compute_list, push_constants, 16)
-	rd.compute_list_dispatch(compute_list, projection_x_groups, projection_y_groups, 1)
-	rd.compute_list_add_barrier(compute_list)
-
-	# Pass 6: recompute divergence so the displayed colors show the corrected field.
-	rd.compute_list_bind_compute_pipeline(compute_list, divergence_pipeline_rid)
-	rd.compute_list_bind_uniform_set(compute_list, divergence_uniform_set_rid, 0)
-	rd.compute_list_set_push_constant(compute_list, push_constants, 16)
-	rd.compute_list_dispatch(compute_list, x_groups, y_groups, 1)
-	rd.compute_list_add_barrier(compute_list)
-
-	# Pass 7: visualize the corrected velocities.
+	# Pass 7: visualize the current velocities.
 	rd.compute_list_bind_compute_pipeline(compute_list, velocity_visualize_pipeline_rid)
 	rd.compute_list_bind_uniform_set(compute_list, velocity_visualize_uniform_set_rid, 0)
 	rd.compute_list_set_push_constant(compute_list, push_constants, 16)
@@ -343,15 +419,20 @@ func _free_compute_resources() -> void:
 	if velocity_texture:
 		velocity_texture.texture_rd_rid = RID()
 	for resource in [
+		advect_input_set_rid, advect_output_set_rid,
+		copy_input_set_rid, copy_output_set_rid,
 		injection_uniform_set_rid, velocity_visualize_uniform_set_rid,
 		divergence_uniform_set_rid, pressure_divergence_set_rid,
 		pressure_a_to_b_input_set_rid, pressure_a_to_b_output_set_rid,
 		pressure_b_to_a_input_set_rid, pressure_b_to_a_output_set_rid,
 		projection_a_pressure_set_rid, projection_b_pressure_set_rid,
-		horizontal_buffer, vertical_buffer, divergence_texture_rid, velocity_texture_rid,
+		horizontal_buffer, vertical_buffer, horizontal_scratch_buffer, vertical_scratch_buffer,
+		divergence_texture_rid, velocity_texture_rid,
 		pressure_texture_a_rid, pressure_texture_b_rid,
+		advect_pipeline_rid, copy_pipeline_rid,
 		velocity_visualize_pipeline_rid, injection_pipeline_rid, divergence_pipeline_rid,
 		pressure_pipeline_rid, projection_pipeline_rid,
+		advect_shader_rid, copy_shader_rid,
 		velocity_visualize_shader_rid, injection_shader_rid, divergence_shader_rid,
 		pressure_shader_rid, projection_shader_rid
 	]:

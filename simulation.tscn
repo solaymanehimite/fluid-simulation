@@ -26,6 +26,7 @@ script = ExtResource("1_7ptn5")
 width = 32
 height = 32
 pressure_iterations = 30
+enable_pressure_projection = true
 
 [node name="PanelContainer" type="PanelContainer" parent="." unique_id=1307574083]
 layout_mode = 1
