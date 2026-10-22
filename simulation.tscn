@@ -3,8 +3,11 @@
 [ext_resource type="Script" uid="uid://dx38eoeek6y0q" path="res://scripts/simulation.gd" id="1_7ptn5"]
 [ext_resource type="Shader" uid="uid://cqfwrc3ie3ql3" path="res://shaders/navier_stokes.gdshader" id="1_vmo2h"]
 
+[sub_resource type="Texture2DRD" id="Texture2DRD_divergence"]
+
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_vmo2h"]
 shader = ExtResource("1_vmo2h")
+shader_parameter/divergence_texture = SubResource("Texture2DRD_divergence")
 
 [sub_resource type="PlaceholderTexture2D" id="PlaceholderTexture2D_pv5co"]
 

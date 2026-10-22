@@ -19,9 +19,7 @@ layout(set = 0, binding = 1, std430) readonly buffer VerticalVelocities {
     float vertical[];   
 };
 
-layout(set = 0, binding = 2, std430) writeonly buffer DivergenceOut {
-    float divergence[];
-};
+layout(rgba32f, set = 0, binding = 2) uniform writeonly image2D divergence_image;
 
 void main() {
     int x = int(gl_GlobalInvocationID.x);
@@ -44,7 +42,6 @@ void main() {
 
     float div = (u_right - u_left) + (v_top - v_bottom);
 
-    int cell_center_idx = y * grid.width + x;
-    divergence[cell_center_idx] = div;
+    imageStore(divergence_image, ivec2(x, y), vec4(div, 0.0, 0.0, 1.0));
 }
 
