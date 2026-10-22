@@ -53,7 +53,7 @@ void fragment() {
         // actual velocity brush radius.
         float brush_distance = length((UV - brush_position) * grid_size);
         float fill = 1.0 - smoothstep(brush_radius - 0.12, brush_radius, brush_distance);
-        background = mix(background, vec3(0.09, 0.09, 0.11), fill * 0.35);
+        background = mix(background, vec3(0.2, 0.2, 0.23), fill * 0.45);
     }
 
     COLOR = vec4(background, 1.0);
