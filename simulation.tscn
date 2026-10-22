@@ -1,52 +1,31 @@
 [gd_scene format=3 uid="uid://cd4dvlvnnagid"]
 
-[ext_resource type="Script" uid="uid://dx38eoeek6y0q" path="res://simulation.gd" id="1_7ptn5"]
-[ext_resource type="Shader" uid="uid://cqfwrc3ie3ql3" path="res://navier_stokes.gdshader" id="1_vmo2h"]
+[ext_resource type="Script" uid="uid://dx38eoeek6y0q" path="res://scripts/simulation.gd" id="1_7ptn5"]
+[ext_resource type="Shader" uid="uid://cqfwrc3ie3ql3" path="res://shaders/navier_stokes.gdshader" id="1_vmo2h"]
 
-[sub_resource type="ShaderMaterial" id="ShaderMaterial_7ptn5"]
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_vmo2h"]
 shader = ExtResource("1_vmo2h")
-shader_parameter/mouse_position = Vector2(0, 0)
-shader_parameter/mouse_speed = Vector2(0, 0)
-shader_parameter/is_clicking = false
 
-[sub_resource type="ShaderMaterial" id="ShaderMaterial_iuv88"]
-shader = ExtResource("1_vmo2h")
-shader_parameter/mouse_position = Vector2(0, 0)
-shader_parameter/mouse_speed = Vector2(0, 0)
-shader_parameter/is_clicking = false
+[sub_resource type="PlaceholderTexture2D" id="PlaceholderTexture2D_pv5co"]
 
-[node name="Simulation" type="Node2D" unique_id=191330725]
+[node name="Control" type="Control" unique_id=1317704656]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 script = ExtResource("1_7ptn5")
 
-[node name="Buffers" type="CanvasLayer" parent="." unique_id=1933736190]
-
-[node name="Buffer1" type="SubViewport" parent="Buffers" unique_id=1870156126]
-
-[node name="ColorRect" type="ColorRect" parent="Buffers/Buffer1" unique_id=336349125]
-material = SubResource("ShaderMaterial_7ptn5")
+[node name="PanelContainer" type="PanelContainer" parent="." unique_id=1307574083]
+layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="Buffer2" type="SubViewport" parent="Buffers" unique_id=1495320923]
-
-[node name="ColorRect" type="ColorRect" parent="Buffers/Buffer2" unique_id=1673416707]
-material = SubResource("ShaderMaterial_iuv88")
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-
-[node name="Display" type="CanvasLayer" parent="." unique_id=870520781]
-
-[node name="Screen" type="TextureRect" parent="Display" unique_id=1992420539]
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-size_flags_horizontal = 8
-size_flags_vertical = 0
+[node name="Screen" type="TextureRect" parent="PanelContainer" unique_id=1372312074]
+material = SubResource("ShaderMaterial_vmo2h")
+layout_mode = 2
+texture = SubResource("PlaceholderTexture2D_pv5co")
