@@ -8,10 +8,19 @@ extends Control
 @export_range(0.1, 100.0, 0.5) var mouse_max_velocity := 10.0
 @export_range(0.0, 2.0, 0.01) var advection_time_scale := 1.0
 @export var enable_pressure_projection := false
+@export_range(0.0, 1.0, 0.05) var boundary_restitution := 1.0
+@export_range(0.0, 10.0, 0.1) var dye_dissipation := 0.5
 
 var divergence_texture: Texture2DRD
 var velocity_texture: Texture2DRD
+var dye_texture: Texture2DRD
+var screen_material: ShaderMaterial
+var arrows_enabled := true
+var divergence_enabled := true
+var dye_is_a_current := true
 var mouse_grid_position := Vector2.ZERO
+var mouse_uv := Vector2(0.5, 0.5)
+var brush_visible := false
 var mouse_impulse := Vector2.ZERO
 var mouse_direction := Vector2.ZERO
 var mouse_is_down := false
@@ -28,6 +37,12 @@ var pressure_shader_rid: RID
 var pressure_pipeline_rid: RID
 var projection_shader_rid: RID
 var projection_pipeline_rid: RID
+var dye_advect_shader_rid: RID
+var dye_advect_pipeline_rid: RID
+var dye_inject_shader_rid: RID
+var dye_inject_pipeline_rid: RID
+var boundary_shader_rid: RID
+var boundary_pipeline_rid: RID
 var advect_shader_rid: RID
 var advect_pipeline_rid: RID
 var copy_shader_rid: RID
@@ -54,42 +69,94 @@ var pressure_b_to_a_input_set_rid: RID
 var pressure_b_to_a_output_set_rid: RID
 var projection_a_pressure_set_rid: RID
 var projection_b_pressure_set_rid: RID
+var dye_texture_a_rid: RID
+var dye_texture_b_rid: RID
+var dye_velocity_set_rid: RID
+var dye_a_to_b_input_set_rid: RID
+var dye_a_to_b_output_set_rid: RID
+var dye_b_to_a_input_set_rid: RID
+var dye_b_to_a_output_set_rid: RID
+var dye_inject_a_set_rid: RID
+var dye_inject_b_set_rid: RID
+var boundary_uniform_set_rid: RID
 
 func _ready() -> void:
-	var screen_material := $PanelContainer/Screen.material as ShaderMaterial
+	Input.set_mouse_mode(Input.MOUSE_MODE_HIDDEN)
+	screen_material = $PanelContainer/Screen.material as ShaderMaterial
 	divergence_texture = screen_material.get_shader_parameter(&"divergence_texture") as Texture2DRD
 	velocity_texture = screen_material.get_shader_parameter(&"velocity_texture") as Texture2DRD
+	dye_texture = screen_material.get_shader_parameter(&"dye_texture") as Texture2DRD
 	# Keep the procedural arrow grid aligned with the simulation dimensions.
 	screen_material.set_shader_parameter(&"grid_size", Vector2(width, height))
+	screen_material.set_shader_parameter(&"show_arrows", arrows_enabled)
+	screen_material.set_shader_parameter(&"show_divergence", divergence_enabled)
+	_update_brush_visual()
 
 	# These resources are shared with the canvas renderer, so create them on
 	# the render thread and use the main RenderingDevice.
 	RenderingServer.call_on_render_thread(_initialize_compute_code)
 
 func _input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
-		mouse_is_down = event.pressed
-		if event.pressed:
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_E:
+			arrows_enabled = not arrows_enabled
+			if screen_material:
+				screen_material.set_shader_parameter(&"show_arrows", arrows_enabled)
+			return
+		if event.keycode == KEY_D:
+			divergence_enabled = not divergence_enabled
+			if screen_material:
+				screen_material.set_shader_parameter(&"show_divergence", divergence_enabled)
+			return
+
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			mouse_brush_radius = min(mouse_brush_radius + 0.5, 10.0)
+			_update_brush_visual()
+			return
+		if event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			mouse_brush_radius = max(mouse_brush_radius - 0.5, 0.5)
+			_update_brush_visual()
+			return
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			mouse_is_down = event.pressed
+			mouse_uv = _screen_to_uv(event.position)
+			brush_visible = true
+			if event.pressed:
+				mouse_grid_position = _screen_to_grid(event.position)
+				mouse_impulse = Vector2.ZERO
+				mouse_direction = Vector2.ZERO
+			else:
+				mouse_direction = Vector2.ZERO
+	elif event is InputEventMouseMotion:
+		mouse_uv = _screen_to_uv(event.position)
+		brush_visible = true
+		if mouse_is_down:
 			mouse_grid_position = _screen_to_grid(event.position)
-			mouse_impulse = Vector2.ZERO
-			mouse_direction = Vector2.ZERO
-		else:
-			mouse_direction = Vector2.ZERO
-	elif event is InputEventMouseMotion and mouse_is_down:
-		mouse_grid_position = _screen_to_grid(event.position)
-		var screen_size := ($PanelContainer/Screen as Control).size
-		var drag_in_grid: Vector2 = event.relative / screen_size * Vector2(width, height)
-		if drag_in_grid.length_squared() > 0.000001:
-			mouse_direction = drag_in_grid.normalized()
-			mouse_impulse = mouse_direction * mouse_max_velocity
+			var screen_size := ($PanelContainer/Screen as Control).size
+			var drag_in_grid: Vector2 = event.relative / screen_size * Vector2(width, height)
+			if drag_in_grid.length_squared() > 0.000001:
+				mouse_direction = drag_in_grid.normalized()
+				mouse_impulse = mouse_direction * mouse_max_velocity
+	_update_brush_visual()
 
 func _screen_to_grid(screen_position: Vector2) -> Vector2:
+	return _screen_to_uv(screen_position) * Vector2(width, height)
+
+func _screen_to_uv(screen_position: Vector2) -> Vector2:
 	var screen := $PanelContainer/Screen as Control
 	var local_position := screen.get_global_transform().affine_inverse() * screen_position
 	return Vector2(
-		local_position.x / screen.size.x * width,
-		local_position.y / screen.size.y * height
+		clamp(local_position.x / screen.size.x, 0.0, 1.0),
+		clamp(local_position.y / screen.size.y, 0.0, 1.0)
 	)
+
+func _update_brush_visual() -> void:
+	if not screen_material:
+		return
+	screen_material.set_shader_parameter(&"brush_position", mouse_uv)
+	screen_material.set_shader_parameter(&"brush_radius", mouse_brush_radius)
+	screen_material.set_shader_parameter(&"show_brush", brush_visible)
 
 func _process(delta: float) -> void:
 	var position := mouse_grid_position
@@ -109,6 +176,18 @@ func _initialize_compute_code() -> void:
 	if not rd:
 		push_error("Compute shaders are not supported on this renderer mode.")
 		return
+
+	var dye_advect_file := load("res://shaders/compute/advect_dye.glsl") as RDShaderFile
+	dye_advect_shader_rid = rd.shader_create_from_spirv(dye_advect_file.get_spirv())
+	dye_advect_pipeline_rid = rd.compute_pipeline_create(dye_advect_shader_rid)
+
+	var dye_inject_file := load("res://shaders/compute/inject_dye.glsl") as RDShaderFile
+	dye_inject_shader_rid = rd.shader_create_from_spirv(dye_inject_file.get_spirv())
+	dye_inject_pipeline_rid = rd.compute_pipeline_create(dye_inject_shader_rid)
+
+	var boundary_file := load("res://shaders/compute/boundary_velocity.glsl") as RDShaderFile
+	boundary_shader_rid = rd.shader_create_from_spirv(boundary_file.get_spirv())
+	boundary_pipeline_rid = rd.compute_pipeline_create(boundary_shader_rid)
 
 	var advect_file := load("res://shaders/compute/advect_velocity.glsl") as RDShaderFile
 	advect_shader_rid = rd.shader_create_from_spirv(advect_file.get_spirv())
@@ -168,6 +247,9 @@ func _initialize_compute_code() -> void:
 	velocity_texture_rid = _create_cleared_texture(texture_format)
 	pressure_texture_a_rid = _create_cleared_texture(texture_format)
 	pressure_texture_b_rid = _create_cleared_texture(texture_format)
+	dye_texture_a_rid = _create_cleared_texture(texture_format, Color(0, 0, 0, 0))
+	dye_texture_b_rid = _create_cleared_texture(texture_format, Color(0, 0, 0, 0))
+	dye_is_a_current = true
 
 	var injection_horiz := RDUniform.new()
 	injection_horiz.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
@@ -233,12 +315,24 @@ func _initialize_compute_code() -> void:
 	pressure_b_to_a_input_set_rid = b_to_a_sets[0]
 	pressure_b_to_a_output_set_rid = b_to_a_sets[1]
 
+	dye_velocity_set_rid = _create_velocity_set(dye_advect_shader_rid, 2, horizontal_buffer, vertical_buffer)
+	dye_a_to_b_input_set_rid = _create_image_set(dye_advect_shader_rid, 0, dye_texture_a_rid)
+	dye_a_to_b_output_set_rid = _create_image_set(dye_advect_shader_rid, 1, dye_texture_b_rid)
+	dye_b_to_a_input_set_rid = _create_image_set(dye_advect_shader_rid, 0, dye_texture_b_rid)
+	dye_b_to_a_output_set_rid = _create_image_set(dye_advect_shader_rid, 1, dye_texture_a_rid)
+	dye_inject_a_set_rid = _create_image_set(dye_inject_shader_rid, 0, dye_texture_a_rid)
+	dye_inject_b_set_rid = _create_image_set(dye_inject_shader_rid, 0, dye_texture_b_rid)
+	boundary_uniform_set_rid = _create_velocity_set(
+		boundary_shader_rid, 0, horizontal_buffer, vertical_buffer
+	)
+
 	projection_a_pressure_set_rid = _create_projection_set(pressure_texture_a_rid)
 	projection_b_pressure_set_rid = _create_projection_set(pressure_texture_b_rid)
 
 	# Both textures are displayed by the fragment shader.
 	divergence_texture.texture_rd_rid = divergence_texture_rid
 	velocity_texture.texture_rd_rid = velocity_texture_rid
+	dye_texture.texture_rd_rid = dye_texture_a_rid
 
 func _create_velocity_set(shader_rid: RID, set_index: int, horizontal_rid: RID, vertical_rid: RID) -> RID:
 	var horizontal := RDUniform.new()
@@ -253,9 +347,16 @@ func _create_velocity_set(shader_rid: RID, set_index: int, horizontal_rid: RID, 
 
 	return rd.uniform_set_create([horizontal, vertical], shader_rid, set_index)
 
-func _create_cleared_texture(texture_format: RDTextureFormat) -> RID:
+func _create_image_set(shader_rid: RID, set_index: int, texture_rid: RID) -> RID:
+	var image := RDUniform.new()
+	image.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	image.binding = 0
+	image.add_id(texture_rid)
+	return rd.uniform_set_create([image], shader_rid, set_index)
+
+func _create_cleared_texture(texture_format: RDTextureFormat, clear_color := Color(0, 0, 0, 1)) -> RID:
 	var texture_rid := rd.texture_create(texture_format, RDTextureView.new(), [])
-	rd.texture_clear(texture_rid, Color(0, 0, 0, 1), 0, 1, 0, 1)
+	rd.texture_clear(texture_rid, clear_color, 0, 1, 0, 1)
 	return texture_rid
 
 func _create_pressure_sets(input_rid: RID, output_rid: RID) -> Array[RID]:
@@ -298,6 +399,10 @@ func _render_process(position: Vector2, impulse: Vector2, active: bool, delta: f
 		return
 
 	var push_constants := PackedInt32Array([width, height, 0, 0]).to_byte_array()
+	var boundary_constants := PackedInt32Array([width, height]).to_byte_array()
+	boundary_constants.append_array(
+		PackedFloat32Array([boundary_restitution, 0.0]).to_byte_array()
+	)
 	var x_groups := (width - 1) / 8 + 1
 	var y_groups := (height - 1) / 8 + 1
 	var compute_list := rd.compute_list_begin()
@@ -329,6 +434,8 @@ func _render_process(position: Vector2, impulse: Vector2, active: bool, delta: f
 	rd.compute_list_add_barrier(compute_list)
 
 	# Pass 2: inject the held mouse direction into the velocity buffers.
+	var injection_x_groups := width / 8 + 1
+	var injection_y_groups := height / 8 + 1
 	if active and impulse.length_squared() > 0.000001 and injection_pipeline_rid.is_valid():
 		var mouse_constants := PackedFloat32Array([
 			position.x, position.y, mouse_brush_radius, mouse_max_velocity,
@@ -339,9 +446,49 @@ func _render_process(position: Vector2, impulse: Vector2, active: bool, delta: f
 		rd.compute_list_set_push_constant(
 			compute_list, mouse_constants.to_byte_array(), mouse_constants.size() * 4
 		)
-		var injection_x_groups := width / 8 + 1
-		var injection_y_groups := height / 8 + 1
 		rd.compute_list_dispatch(compute_list, injection_x_groups, injection_y_groups, 1)
+		rd.compute_list_add_barrier(compute_list)
+
+	# Reflect velocities at the grid boundaries.
+	rd.compute_list_bind_compute_pipeline(compute_list, boundary_pipeline_rid)
+	rd.compute_list_bind_uniform_set(compute_list, boundary_uniform_set_rid, 0)
+	rd.compute_list_set_push_constant(compute_list, boundary_constants, 16)
+	rd.compute_list_dispatch(compute_list, injection_x_groups, injection_y_groups, 1)
+	rd.compute_list_add_barrier(compute_list)
+
+	# Advect dye using the current velocity field, then swap the dye textures.
+	var dye_x_groups := (width - 1) / 8 + 1
+	var dye_y_groups := (height - 1) / 8 + 1
+	var dye_input_set := dye_a_to_b_input_set_rid if dye_is_a_current else dye_b_to_a_input_set_rid
+	var dye_output_set := dye_a_to_b_output_set_rid if dye_is_a_current else dye_b_to_a_output_set_rid
+	rd.compute_list_bind_compute_pipeline(compute_list, dye_advect_pipeline_rid)
+	rd.compute_list_bind_uniform_set(compute_list, dye_input_set, 0)
+	rd.compute_list_bind_uniform_set(compute_list, dye_output_set, 1)
+	rd.compute_list_bind_uniform_set(compute_list, dye_velocity_set_rid, 2)
+	var dye_advection_constants := PackedInt32Array([width, height]).to_byte_array()
+	dye_advection_constants.append_array(
+		PackedFloat32Array([delta, dye_dissipation]).to_byte_array()
+	)
+	rd.compute_list_set_push_constant(compute_list, dye_advection_constants, 16)
+	rd.compute_list_dispatch(compute_list, dye_x_groups, dye_y_groups, 1)
+	rd.compute_list_add_barrier(compute_list)
+	dye_is_a_current = not dye_is_a_current
+	var current_dye_rid := dye_texture_b_rid if not dye_is_a_current else dye_texture_a_rid
+	dye_texture.texture_rd_rid = current_dye_rid
+
+	# Add dye at the mouse position while the mouse is held.
+	if active and impulse.length_squared() > 0.000001 and dye_inject_pipeline_rid.is_valid():
+		var dye_constants := PackedFloat32Array([
+			position.x, position.y, mouse_brush_radius, 1.0,
+			1.0, 0.2, 0.03, 0.8
+		])
+		var dye_inject_set := dye_inject_a_set_rid if dye_is_a_current else dye_inject_b_set_rid
+		rd.compute_list_bind_compute_pipeline(compute_list, dye_inject_pipeline_rid)
+		rd.compute_list_bind_uniform_set(compute_list, dye_inject_set, 0)
+		rd.compute_list_set_push_constant(
+			compute_list, dye_constants.to_byte_array(), dye_constants.size() * 4
+		)
+		rd.compute_list_dispatch(compute_list, dye_x_groups, dye_y_groups, 1)
 		rd.compute_list_add_barrier(compute_list)
 
 	# Pass 2: calculate divergence.
@@ -373,6 +520,13 @@ func _render_process(position: Vector2, impulse: Vector2, active: bool, delta: f
 		rd.compute_list_bind_uniform_set(compute_list, final_pressure_set, 0)
 		rd.compute_list_set_push_constant(compute_list, push_constants, 16)
 		rd.compute_list_dispatch(compute_list, projection_x_groups, projection_y_groups, 1)
+		rd.compute_list_add_barrier(compute_list)
+
+		# Re-apply reflective boundaries after pressure projection.
+		rd.compute_list_bind_compute_pipeline(compute_list, boundary_pipeline_rid)
+		rd.compute_list_bind_uniform_set(compute_list, boundary_uniform_set_rid, 0)
+		rd.compute_list_set_push_constant(compute_list, boundary_constants, 16)
+		rd.compute_list_dispatch(compute_list, injection_x_groups, injection_y_groups, 1)
 		rd.compute_list_add_barrier(compute_list)
 
 		# Pass 6: recompute divergence after projection.
@@ -409,6 +563,9 @@ func _create_vertical_data() -> PackedByteArray:
 	values[(cy + 1) * width + cx] = 10.0
 	return values.to_byte_array()
 
+func _exit_tree() -> void:
+	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_PREDELETE and rd:
 		RenderingServer.call_on_render_thread(_free_compute_resources)
@@ -418,6 +575,8 @@ func _free_compute_resources() -> void:
 		divergence_texture.texture_rd_rid = RID()
 	if velocity_texture:
 		velocity_texture.texture_rd_rid = RID()
+	if dye_texture:
+		dye_texture.texture_rd_rid = RID()
 	for resource in [
 		advect_input_set_rid, advect_output_set_rid,
 		copy_input_set_rid, copy_output_set_rid,
@@ -426,12 +585,18 @@ func _free_compute_resources() -> void:
 		pressure_a_to_b_input_set_rid, pressure_a_to_b_output_set_rid,
 		pressure_b_to_a_input_set_rid, pressure_b_to_a_output_set_rid,
 		projection_a_pressure_set_rid, projection_b_pressure_set_rid,
+		dye_velocity_set_rid, dye_a_to_b_input_set_rid, dye_a_to_b_output_set_rid,
+		dye_b_to_a_input_set_rid, dye_b_to_a_output_set_rid,
+		dye_inject_a_set_rid, dye_inject_b_set_rid,
+		boundary_uniform_set_rid,
 		horizontal_buffer, vertical_buffer, horizontal_scratch_buffer, vertical_scratch_buffer,
-		divergence_texture_rid, velocity_texture_rid,
+		divergence_texture_rid, velocity_texture_rid, dye_texture_a_rid, dye_texture_b_rid,
 		pressure_texture_a_rid, pressure_texture_b_rid,
+		dye_advect_pipeline_rid, dye_inject_pipeline_rid, boundary_pipeline_rid,
 		advect_pipeline_rid, copy_pipeline_rid,
 		velocity_visualize_pipeline_rid, injection_pipeline_rid, divergence_pipeline_rid,
 		pressure_pipeline_rid, projection_pipeline_rid,
+		dye_advect_shader_rid, dye_inject_shader_rid, boundary_shader_rid,
 		advect_shader_rid, copy_shader_rid,
 		velocity_visualize_shader_rid, injection_shader_rid, divergence_shader_rid,
 		pressure_shader_rid, projection_shader_rid

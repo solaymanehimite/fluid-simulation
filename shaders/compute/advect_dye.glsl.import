@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://ct0bwh8sxebbl"
+path="res://.godot/imported/advect_dye.glsl-22b7ff1e82b874bcc986e323d6c1c0b4.res"
+
+[deps]
+
+source_file="res://shaders/compute/advect_dye.glsl"
+dest_files=["res://.godot/imported/advect_dye.glsl-22b7ff1e82b874bcc986e323d6c1c0b4.res"]
+
+[params]
+

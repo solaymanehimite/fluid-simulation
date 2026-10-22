@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bljpfc7m1drfv"
+path="res://.godot/imported/inject_dye.glsl-b649d1ed7ad6fc7993ee598c72ca1250.res"
+
+[deps]
+
+source_file="res://shaders/compute/inject_dye.glsl"
+dest_files=["res://.godot/imported/inject_dye.glsl-b649d1ed7ad6fc7993ee598c72ca1250.res"]
+
+[params]
+

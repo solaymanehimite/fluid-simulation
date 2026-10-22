@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dje14d8yfb5kw"
+path="res://.godot/imported/boundary_velocity.glsl-4afa2b4e33f4d28c6b0770d3b9764396.res"
+
+[deps]
+
+source_file="res://shaders/compute/boundary_velocity.glsl"
+dest_files=["res://.godot/imported/boundary_velocity.glsl-4afa2b4e33f4d28c6b0770d3b9764396.res"]
+
+[params]
+
