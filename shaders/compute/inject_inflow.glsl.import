@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://buftt5vs5clny"
+path="res://.godot/imported/inject_inflow.glsl-881769db9e11b37b11822294359cc661.res"
+
+[deps]
+
+source_file="res://shaders/compute/inject_inflow.glsl"
+dest_files=["res://.godot/imported/inject_inflow.glsl-881769db9e11b37b11822294359cc661.res"]
+
+[params]
+

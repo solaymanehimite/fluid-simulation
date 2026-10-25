@@ -13,6 +13,9 @@ uniform float brush_radius = 2.0;
 uniform bool bloom_enabled = true;
 uniform float bloom_strength = 0.8;
 uniform float bloom_radius = 2.0;
+uniform bool obstacle_enabled = false;
+uniform vec2 obstacle_position = vec2(0.5, 0.5);
+uniform float obstacle_radius = 0.15;
 
 void fragment() {
     float divergence = texture(divergence_texture, UV).r;
@@ -44,6 +47,14 @@ void fragment() {
             }
         }
         background += glow / total_weight * bloom_strength;
+    }
+
+    if (obstacle_enabled) {
+        float obstacle_distance = length((UV - obstacle_position) * grid_size);
+        float obstacle_fill = 1.0 - smoothstep(obstacle_radius * max(grid_size.x, grid_size.y) - 0.15, obstacle_radius * max(grid_size.x, grid_size.y), obstacle_distance);
+        float obstacle_edge = 1.0 - smoothstep(0.08, 0.2, abs(obstacle_distance - obstacle_radius * max(grid_size.x, grid_size.y)));
+        background = mix(background, vec3(0.015, 0.018, 0.025), obstacle_fill);
+        background = mix(background, vec3(0.8, 0.85, 0.9), obstacle_edge);
     }
 
     if (show_arrows) {

@@ -11,6 +11,8 @@ extends Control
 @export var enable_pressure_projection := false
 @export_range(0.0, 1.0, 0.05) var boundary_restitution := 1.0
 @export_range(0.0, 10.0, 0.1) var dye_dissipation := 0.5
+@export_range(0.5, 16.0, 0.5) var test_obstacle_radius := 2.5
+@export_range(0.0, 100.0, 0.5) var test_inflow_speed := 8.0
 
 var divergence_texture: Texture2DRD
 var velocity_texture: Texture2DRD
@@ -26,11 +28,14 @@ var brush_visible := false
 var mouse_impulse := Vector2.ZERO
 var mouse_direction := Vector2.ZERO
 var mouse_is_down := false
+var vortex_test_enabled := false
 
 # These resources are accessed on Godot's render thread after initialization.
 var rd: RenderingDevice
 var injection_shader_rid: RID
 var injection_pipeline_rid: RID
+var inflow_shader_rid: RID
+var inflow_pipeline_rid: RID
 var velocity_visualize_shader_rid: RID
 var velocity_visualize_pipeline_rid: RID
 var divergence_shader_rid: RID
@@ -58,6 +63,7 @@ var advect_output_set_rid: RID
 var copy_input_set_rid: RID
 var copy_output_set_rid: RID
 var injection_uniform_set_rid: RID
+var inflow_uniform_set_rid: RID
 var velocity_visualize_uniform_set_rid: RID
 var divergence_texture_rid: RID
 var velocity_texture_rid: RID
@@ -94,6 +100,7 @@ func _ready() -> void:
 	screen_material.set_shader_parameter(&"show_arrows", arrows_enabled)
 	screen_material.set_shader_parameter(&"show_divergence", divergence_enabled)
 	_update_brush_visual()
+	_update_test_visual()
 
 	# These resources are shared with the canvas renderer, so create them on
 	# the render thread and use the main RenderingDevice.
@@ -111,15 +118,30 @@ func _input(event: InputEvent) -> void:
 			if screen_material:
 				screen_material.set_shader_parameter(&"show_divergence", divergence_enabled)
 			return
+		if event.keycode == KEY_T:
+			vortex_test_enabled = not vortex_test_enabled
+			arrows_enabled = vortex_test_enabled
+			if screen_material:
+				screen_material.set_shader_parameter(&"show_arrows", arrows_enabled)
+			_update_test_visual()
+			return
 
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
-			mouse_brush_radius = min(mouse_brush_radius + 0.5, 32.0)
-			_update_brush_visual()
+			if vortex_test_enabled:
+				test_obstacle_radius = min(test_obstacle_radius + 0.5, 16.0)
+				_update_test_visual()
+			else:
+				mouse_brush_radius = min(mouse_brush_radius + 0.5, 32.0)
+				_update_brush_visual()
 			return
 		if event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			mouse_brush_radius = max(mouse_brush_radius - 0.5, 0.5)
-			_update_brush_visual()
+			if vortex_test_enabled:
+				test_obstacle_radius = max(test_obstacle_radius - 0.5, 0.5)
+				_update_test_visual()
+			else:
+				mouse_brush_radius = max(mouse_brush_radius - 0.5, 0.5)
+				_update_brush_visual()
 			return
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			mouse_uv = _screen_to_uv(event.position)
@@ -161,9 +183,21 @@ func _update_brush_visual() -> void:
 		return
 	screen_material.set_shader_parameter(&"brush_position", mouse_uv)
 	screen_material.set_shader_parameter(&"brush_radius", mouse_brush_radius)
-	screen_material.set_shader_parameter(&"show_brush", brush_visible)
+	screen_material.set_shader_parameter(&"show_brush", brush_visible and not vortex_test_enabled)
+
+func _update_test_visual() -> void:
+	if not screen_material:
+		return
+	screen_material.set_shader_parameter(&"obstacle_enabled", vortex_test_enabled)
+	screen_material.set_shader_parameter(&"obstacle_position", mouse_uv)
+	screen_material.set_shader_parameter(
+		&"obstacle_radius", test_obstacle_radius / float(max(width, height))
+	)
+	_update_brush_visual()
 
 func _process(delta: float) -> void:
+	if vortex_test_enabled:
+		_update_test_visual()
 	var position := mouse_grid_position
 	# Keep applying the last drag direction while the button is held. This
 	# makes the cursor act like a continuous force instead of a one-frame kick.
@@ -173,7 +207,7 @@ func _process(delta: float) -> void:
 	var active := mouse_is_down
 	mouse_impulse = Vector2.ZERO
 	RenderingServer.call_on_render_thread(
-		_render_process.bind(position, impulse, active, delta * advection_time_scale)
+		_render_process.bind(position, impulse, active, delta * advection_time_scale, vortex_test_enabled, mouse_uv)
 	)
 
 func _initialize_compute_code() -> void:
@@ -205,6 +239,10 @@ func _initialize_compute_code() -> void:
 	var injection_file := load("res://shaders/compute/inject_velocity.glsl") as RDShaderFile
 	injection_shader_rid = rd.shader_create_from_spirv(injection_file.get_spirv())
 	injection_pipeline_rid = rd.compute_pipeline_create(injection_shader_rid)
+
+	var inflow_file := load("res://shaders/compute/inject_inflow.glsl") as RDShaderFile
+	inflow_shader_rid = rd.shader_create_from_spirv(inflow_file.get_spirv())
+	inflow_pipeline_rid = rd.compute_pipeline_create(inflow_shader_rid)
 
 	var velocity_visualize_file := load("res://shaders/compute/velocity_visualize.glsl") as RDShaderFile
 	velocity_visualize_shader_rid = rd.shader_create_from_spirv(velocity_visualize_file.get_spirv())
@@ -268,6 +306,12 @@ func _initialize_compute_code() -> void:
 	injection_uniform_set_rid = rd.uniform_set_create(
 		[injection_horiz, injection_vert], injection_shader_rid, 0
 	)
+
+	var inflow_horiz := RDUniform.new()
+	inflow_horiz.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	inflow_horiz.binding = 0
+	inflow_horiz.add_id(horizontal_buffer)
+	inflow_uniform_set_rid = rd.uniform_set_create([inflow_horiz], inflow_shader_rid, 0)
 
 	var visual_horiz := RDUniform.new()
 	visual_horiz.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
@@ -399,7 +443,10 @@ func _create_projection_set(pressure_rid: RID) -> RID:
 		[pressure, horizontal, vertical], projection_shader_rid, 0
 	)
 
-func _render_process(position: Vector2, impulse: Vector2, active: bool, delta: float) -> void:
+func _render_process(
+	position: Vector2, impulse: Vector2, active: bool, delta: float,
+	test_enabled: bool, obstacle_uv: Vector2
+) -> void:
 	if not rd or not divergence_pipeline_rid.is_valid():
 		return
 
@@ -407,6 +454,12 @@ func _render_process(position: Vector2, impulse: Vector2, active: bool, delta: f
 	var boundary_constants := PackedInt32Array([width, height]).to_byte_array()
 	boundary_constants.append_array(
 		PackedFloat32Array([boundary_restitution, 0.0]).to_byte_array()
+	)
+	boundary_constants.append_array(
+		PackedFloat32Array([
+			obstacle_uv.x * width, obstacle_uv.y * height,
+			test_obstacle_radius, 1.0 if test_enabled else 0.0
+		]).to_byte_array()
 	)
 	var x_groups := (width - 1) / 8 + 1
 	var y_groups := (height - 1) / 8 + 1
@@ -438,9 +491,21 @@ func _render_process(position: Vector2, impulse: Vector2, active: bool, delta: f
 	rd.compute_list_dispatch(compute_list, advection_x_groups, advection_y_groups, 1)
 	rd.compute_list_add_barrier(compute_list)
 
-	# Pass 2: inject the held mouse direction into the velocity buffers.
+	# Test mode continuously feeds every row from the left boundary.
 	var injection_x_groups := width / 8 + 1
 	var injection_y_groups := height / 8 + 1
+	if test_enabled and inflow_pipeline_rid.is_valid():
+		var inflow_constants := PackedInt32Array([width, height]).to_byte_array()
+		inflow_constants.append_array(
+			PackedFloat32Array([test_inflow_speed, 0.0]).to_byte_array()
+		)
+		rd.compute_list_bind_compute_pipeline(compute_list, inflow_pipeline_rid)
+		rd.compute_list_bind_uniform_set(compute_list, inflow_uniform_set_rid, 0)
+		rd.compute_list_set_push_constant(compute_list, inflow_constants, 16)
+		rd.compute_list_dispatch(compute_list, injection_x_groups, injection_y_groups, 1)
+		rd.compute_list_add_barrier(compute_list)
+
+	# Pass 2: inject the held mouse direction into the velocity buffers.
 	if active and impulse.length_squared() > 0.000001 and injection_pipeline_rid.is_valid():
 		var mouse_constants := PackedFloat32Array([
 			position.x, position.y, mouse_brush_radius, mouse_max_velocity,
@@ -457,7 +522,7 @@ func _render_process(position: Vector2, impulse: Vector2, active: bool, delta: f
 	# Reflect velocities at the grid boundaries.
 	rd.compute_list_bind_compute_pipeline(compute_list, boundary_pipeline_rid)
 	rd.compute_list_bind_uniform_set(compute_list, boundary_uniform_set_rid, 0)
-	rd.compute_list_set_push_constant(compute_list, boundary_constants, 16)
+	rd.compute_list_set_push_constant(compute_list, boundary_constants, 32)
 	rd.compute_list_dispatch(compute_list, injection_x_groups, injection_y_groups, 1)
 	rd.compute_list_add_barrier(compute_list)
 
@@ -496,6 +561,21 @@ func _render_process(position: Vector2, impulse: Vector2, active: bool, delta: f
 		rd.compute_list_dispatch(compute_list, dye_x_groups, dye_y_groups, 1)
 		rd.compute_list_add_barrier(compute_list)
 
+	# In test mode, continuously paint dye at the inflow edge so vortices are visible.
+	if test_enabled and dye_inject_pipeline_rid.is_valid():
+		var inflow_dye_constants := PackedFloat32Array([
+			0.0, 0.0, 1.5, 2.0,
+			0.1, 0.55, 1.0, 0.8
+		])
+		var inflow_dye_set := dye_inject_a_set_rid if dye_is_a_current else dye_inject_b_set_rid
+		rd.compute_list_bind_compute_pipeline(compute_list, dye_inject_pipeline_rid)
+		rd.compute_list_bind_uniform_set(compute_list, inflow_dye_set, 0)
+		rd.compute_list_set_push_constant(
+			compute_list, inflow_dye_constants.to_byte_array(), inflow_dye_constants.size() * 4
+		)
+		rd.compute_list_dispatch(compute_list, dye_x_groups, dye_y_groups, 1)
+		rd.compute_list_add_barrier(compute_list)
+
 	# Pass 2: calculate divergence.
 	rd.compute_list_bind_compute_pipeline(compute_list, divergence_pipeline_rid)
 	rd.compute_list_bind_uniform_set(compute_list, divergence_uniform_set_rid, 0)
@@ -530,7 +610,7 @@ func _render_process(position: Vector2, impulse: Vector2, active: bool, delta: f
 		# Re-apply reflective boundaries after pressure projection.
 		rd.compute_list_bind_compute_pipeline(compute_list, boundary_pipeline_rid)
 		rd.compute_list_bind_uniform_set(compute_list, boundary_uniform_set_rid, 0)
-		rd.compute_list_set_push_constant(compute_list, boundary_constants, 16)
+		rd.compute_list_set_push_constant(compute_list, boundary_constants, 32)
 		rd.compute_list_dispatch(compute_list, injection_x_groups, injection_y_groups, 1)
 		rd.compute_list_add_barrier(compute_list)
 
@@ -593,17 +673,17 @@ func _free_compute_resources() -> void:
 		dye_velocity_set_rid, dye_a_to_b_input_set_rid, dye_a_to_b_output_set_rid,
 		dye_b_to_a_input_set_rid, dye_b_to_a_output_set_rid,
 		dye_inject_a_set_rid, dye_inject_b_set_rid,
-		boundary_uniform_set_rid,
+		boundary_uniform_set_rid, inflow_uniform_set_rid,
 		horizontal_buffer, vertical_buffer, horizontal_scratch_buffer, vertical_scratch_buffer,
 		divergence_texture_rid, velocity_texture_rid, dye_texture_a_rid, dye_texture_b_rid,
 		pressure_texture_a_rid, pressure_texture_b_rid,
 		dye_advect_pipeline_rid, dye_inject_pipeline_rid, boundary_pipeline_rid,
 		advect_pipeline_rid, copy_pipeline_rid,
-		velocity_visualize_pipeline_rid, injection_pipeline_rid, divergence_pipeline_rid,
+		velocity_visualize_pipeline_rid, injection_pipeline_rid, inflow_pipeline_rid, divergence_pipeline_rid,
 		pressure_pipeline_rid, projection_pipeline_rid,
 		dye_advect_shader_rid, dye_inject_shader_rid, boundary_shader_rid,
 		advect_shader_rid, copy_shader_rid,
-		velocity_visualize_shader_rid, injection_shader_rid, divergence_shader_rid,
+		velocity_visualize_shader_rid, injection_shader_rid, inflow_shader_rid, divergence_shader_rid,
 		pressure_shader_rid, projection_shader_rid
 	]:
 		if resource.is_valid():

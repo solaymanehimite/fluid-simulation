@@ -17,8 +17,16 @@ void main() {
         return;
     }
 
-    float distance_to_mouse = distance(vec2(cell), params.mouse.xy);
-    float falloff = max(0.0, 1.0 - distance_to_mouse / params.mouse.z);
+    float distance_to_mouse;
+    float falloff;
+    if (params.mouse.w > 1.5) {
+        // Test mode paints a continuous dye source along the left edge.
+        distance_to_mouse = float(cell.x);
+        falloff = max(0.0, 1.0 - distance_to_mouse / params.mouse.z);
+    } else {
+        distance_to_mouse = distance(vec2(cell), params.mouse.xy);
+        falloff = max(0.0, 1.0 - distance_to_mouse / params.mouse.z);
+    }
     if (falloff <= 0.0) {
         return;
     }

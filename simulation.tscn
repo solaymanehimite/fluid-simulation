@@ -24,6 +24,9 @@ shader_parameter/brush_radius = 2.0
 shader_parameter/bloom_enabled = true
 shader_parameter/bloom_strength = 0.8
 shader_parameter/bloom_radius = 2.0
+shader_parameter/obstacle_enabled = false
+shader_parameter/obstacle_position = Vector2(0.5, 0.5)
+shader_parameter/obstacle_radius = 0.15
 
 [sub_resource type="PlaceholderTexture2D" id="PlaceholderTexture2D_pv5co"]
 
@@ -41,7 +44,8 @@ pressure_iterations = 80
 mouse_max_velocity = 20.1
 advection_time_scale = 2.0
 enable_pressure_projection = true
-dye_dissipation = 0.1
+dye_dissipation = 1.0
+test_inflow_speed = 100.0
 
 [node name="PanelContainer" type="PanelContainer" parent="." unique_id=1307574083]
 layout_mode = 1
