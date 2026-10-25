@@ -3,12 +3,16 @@ shader_type canvas_item;
 uniform sampler2D divergence_texture : filter_nearest;
 uniform sampler2D velocity_texture : filter_nearest;
 uniform sampler2D dye_texture : filter_nearest;
+uniform sampler2D dye_bloom_texture : filter_linear;
 uniform vec2 grid_size = vec2(16.0, 16.0);
 uniform bool show_arrows = true;
 uniform bool show_divergence = true;
 uniform bool show_brush = false;
 uniform vec2 brush_position = vec2(0.5, 0.5);
 uniform float brush_radius = 2.0;
+uniform bool bloom_enabled = true;
+uniform float bloom_strength = 0.8;
+uniform float bloom_radius = 2.0;
 
 void fragment() {
     float divergence = texture(divergence_texture, UV).r;
@@ -24,6 +28,23 @@ void fragment() {
 
     vec4 dye = texture(dye_texture, UV);
     background = mix(background, dye.rgb, clamp(dye.a, 0.0, 1.0));
+
+    // Small screen-space blur around the dye acts as a post-process bloom.
+    if (bloom_enabled) {
+        vec3 glow = vec3(0.0);
+        float total_weight = 0.0;
+        vec2 texel = 1.0 / grid_size;
+        for (int x = -2; x <= 2; x++) {
+            for (int y = -2; y <= 2; y++) {
+                vec2 offset = vec2(float(x), float(y));
+                float weight = exp(-dot(offset, offset) / (2.0 * bloom_radius * bloom_radius));
+                vec4 sample_dye = texture(dye_bloom_texture, clamp(UV + offset * texel, vec2(0.0), vec2(1.0)));
+                glow += sample_dye.rgb * sample_dye.a * weight;
+                total_weight += weight;
+            }
+        }
+        background += glow / total_weight * bloom_strength;
+    }
 
     if (show_arrows) {
         vec2 velocity = texture(velocity_texture, UV).rg;

@@ -14,12 +14,16 @@ shader = ExtResource("1_vmo2h")
 shader_parameter/divergence_texture = SubResource("Texture2DRD_divergence")
 shader_parameter/velocity_texture = SubResource("Texture2DRD_velocity")
 shader_parameter/dye_texture = SubResource("Texture2DRD_dye")
+shader_parameter/dye_bloom_texture = SubResource("Texture2DRD_dye")
 shader_parameter/grid_size = Vector2(16, 16)
 shader_parameter/show_arrows = false
 shader_parameter/show_divergence = false
 shader_parameter/show_brush = false
 shader_parameter/brush_position = Vector2(0.5, 0.5)
 shader_parameter/brush_radius = 2.0
+shader_parameter/bloom_enabled = true
+shader_parameter/bloom_strength = 0.8
+shader_parameter/bloom_radius = 2.0
 
 [sub_resource type="PlaceholderTexture2D" id="PlaceholderTexture2D_pv5co"]
 
@@ -33,11 +37,11 @@ grow_vertical = 2
 script = ExtResource("1_7ptn5")
 width = 160
 height = 160
-pressure_iterations = 60
+pressure_iterations = 80
 mouse_max_velocity = 20.1
 advection_time_scale = 2.0
 enable_pressure_projection = true
-dye_dissipation = 0.3
+dye_dissipation = 0.1
 
 [node name="PanelContainer" type="PanelContainer" parent="." unique_id=1307574083]
 layout_mode = 1

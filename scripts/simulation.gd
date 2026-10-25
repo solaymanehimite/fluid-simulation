@@ -4,7 +4,7 @@ extends Control
 @export var width := 16
 @export var height := 16
 @export_range(1, 200) var pressure_iterations := 100
-@export_range(0.5, 10.0, 0.5) var mouse_brush_radius := 2.0
+@export_range(0.5, 32.0, 0.5) var mouse_brush_radius := 2.0
 @export_range(0.1, 100.0, 0.5) var mouse_max_velocity := 10.0
 @export_range(0.0, 10.0, 0.1) var velocity_dissipation := 0.05
 @export_range(0.0, 2.0, 0.01) var advection_time_scale := 1.0
@@ -114,7 +114,7 @@ func _input(event: InputEvent) -> void:
 
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
-			mouse_brush_radius = min(mouse_brush_radius + 0.5, 10.0)
+			mouse_brush_radius = min(mouse_brush_radius + 0.5, 32.0)
 			_update_brush_visual()
 			return
 		if event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
