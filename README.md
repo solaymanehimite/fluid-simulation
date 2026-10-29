@@ -1,25 +1,13 @@
 <div align="center">
-  <img src="icon.svg" alt="Navier-Stokes Equations icon" width="96" />
-
+  
   # Navier-Stokes equations
 
-  **An interactive 2D fluid simulation built with Godot compute shaders.**
+  **An interactive 2D fluid simulation**
 
   [![Godot 4.6](https://img.shields.io/badge/Godot-4.6-478cbf?style=flat-square&logo=godot-engine&logoColor=white)](https://godotengine.org/)
-  [![GDScript](https://img.shields.io/badge/GDScript-2.0-478cbf?style=flat-square&logo=godot-engine&logoColor=white)](https://docs.godotengine.org/en/stable/tutorials/scripting/gdscript/gdscript_basics.html)
-
-  [Run it](#getting-started) · [Controls](#controls) · [How it works](#how-it-works)
 </div>
 
-A small, real-time playground for experimenting with incompressible fluid flow. Drag through the field to inject velocity and dye, then turn on the visual overlays to inspect what the solver is doing.
-
-## Highlights
-
-- GPU-accelerated simulation through Godot's `RenderingDevice` and GLSL compute shaders
-- Velocity advection, boundary handling, divergence, pressure iterations, and projection
-- Interactive dye injection with randomized colors and a lightweight bloom effect
-- Optional velocity arrows, divergence visualization, and a vortex obstacle test
-- Tunable simulation parameters exposed directly in the Godot editor
+A small, real-time playground for experimenting with incompressible fluid flow. 
 
 ## Getting started
 
@@ -39,17 +27,6 @@ A small, real-time playground for experimenting with incompressible fluid flow. 
 
 The main scene is `simulation.tscn`.
 
-## Controls
-
-| Input | Action |
-| --- | --- |
-| Left-click and drag | Inject velocity and dye into the fluid |
-| Mouse wheel | Change the brush radius |
-| `E` | Toggle velocity arrows |
-| `D` | Toggle divergence visualization |
-| `T` | Toggle the vortex obstacle test |
-| Mouse wheel in vortex test mode | Resize the obstacle |
-
 ## How it works
 
 The simulation approximates the incompressible Navier-Stokes equations on a `160 × 160` grid:
@@ -68,16 +45,6 @@ The first equation describes how the fluid velocity changes over time. It combin
 In the project, `u` is the velocity field, `p` is pressure, `rho` is density, `nu` is viscosity, and `f` includes mouse input and test inflow. Compute shaders advect the velocity, apply boundary conditions, calculate divergence, solve the pressure field with Jacobi iterations, and project the velocity to reduce divergence. Dye is carried by the velocity field as a visual tracer, then a canvas shader renders the result and its debug overlays.
 
 Most solver settings can be changed on the root `Control` node in the Inspector.
-
-## Project layout
-
-```text
-simulation.tscn              Main scene and default settings
-scripts/simulation.gd        Input, simulation setup, and render-thread dispatch
-shaders/compute/              GPU simulation stages
-shaders/navier_stokes.gdshader    Final display and debug overlays
-icon.svg                     Project icon
-```
 
 ## Built with
 
