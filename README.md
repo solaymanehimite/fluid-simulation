@@ -32,9 +32,7 @@ The main scene is `simulation.tscn`.
 The simulation approximates the incompressible Navier-Stokes equations on a `160 × 160` grid:
 
 $$
-\frac{\partial \mathbf{u}}{\partial t} + (\mathbf{u} \cdot \nabla)\mathbf{u}
-= -\frac{1}{\rho}\nabla p + \nu\nabla^2\mathbf{u} + \mathbf{f}
-$$
+\rho \left( \frac{\partial \mathbf{u}}{\partial t} + (\mathbf{u} \cdot \nabla) \mathbf{u} \right) = -\nabla p + \mu \nabla^2 \mathbf{u} + \mathbf{f}$$
 
 $$
 \nabla \cdot \mathbf{u} = 0
