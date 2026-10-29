@@ -1,13 +1,11 @@
 <div align="center">
   
-  # Navier-Stokes equations
-
-  **An interactive 2D fluid simulation**
+  # Interactive 2D fluid simulation.
 
   [![Godot 4.6](https://img.shields.io/badge/Godot-4.6-478cbf?style=flat-square&logo=godot-engine&logoColor=white)](https://godotengine.org/)
 </div>
 
-A small, real-time playground for experimenting with incompressible fluid flow. 
+A small, real-time playground for experimenting with incompressible 2d fluid flow. built with godot 4.6 
 
 ## Getting started
 
